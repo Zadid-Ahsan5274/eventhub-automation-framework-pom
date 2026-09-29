@@ -1,0 +1,32 @@
+[
+  {
+    "scenario": "wrong password",
+    "email": "nobody@example.com",
+    "password": "WrongPass@123"
+  },
+  {
+    "scenario": "unregistered email",
+    "email": "unregistered_user_98765@example.com",
+    "password": "Test@12345"
+  },
+  {
+    "scenario": "malformed email",
+    "email": "not-an-email",
+    "password": "Test@12345"
+  },
+  {
+    "scenario": "empty password",
+    "email": "user@example.com",
+    "password": ""
+  },
+  {
+    "scenario": "empty email",
+    "email": "",
+    "password": "Test@12345"
+  },
+  {
+    "scenario": "whitespace only",
+    "email": "  ",
+    "password": " "
+  }
+]
