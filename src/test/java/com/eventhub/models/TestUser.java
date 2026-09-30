@@ -1,4 +1,3 @@
 package com.eventhub.models;
 
-public class TestUser {
-}
+public record TestUser(String name,String email, String password) {}
