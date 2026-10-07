@@ -1,0 +1,5 @@
+[
+  { "scenario": "missing @ in email", "name": "QA User", "email": "qa.user.example.com",  "password": "Test@12345" },
+  { "scenario": "missing domain",     "name": "QA User", "email": "qa.user@",             "password": "Test@12345" },
+  { "scenario": "too short password", "name": "QA User", "email": "qa.short@example.com", "password": "12" }
+]
