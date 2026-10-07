@@ -1,27 +1,150 @@
-name: Playwright Tests
+name: EventHub CI/CD
+
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
+  schedule:
+    - cron: "30 2 * * 1-5"          # nightly regression, weekdays 02:30 UTC
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Environment under test"
+        default: "https://eventhub.rahulshettyacademy.com"
+      suite:
+        description: "TestNG suite"
+        type: choice
+        default: testng.xml
+        options: [testng.xml, testng-smoke.xml]
+      browsers:
+        description: "Browsers as JSON array"
+        default: '["chromium","firefox"]'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BASE_URL: ${{ github.event.inputs.base_url || 'https://eventhub.rahulshettyacademy.com' }}
+
 jobs:
-  test:
-    timeout-minutes: 60
+  # ---------- Stage 1: fast gate ----------
+  smoke:
+    name: Smoke (chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17", cache: maven }
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-${{ hashFiles('pom.xml') }}
+      - name: Install Playwright chromium
+        run: >
+          mvn -B -q exec:java -Dexec.mainClass=com.microsoft.playwright.CLI
+          -Dexec.classpathScope=test -Dexec.args="install --with-deps chromium"
+      - name: Run smoke tests
+        run: mvn -B clean test -DsuiteXml=testng-smoke.xml -Dbrowser=chromium -Dheadless=true -Dbase.url=$BASE_URL
+        env:
+          TEST_EMAIL: ${{ secrets.TEST_EMAIL }}
+          TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: allure-results-smoke
+          path: target/allure-results
+          if-no-files-found: ignore
+
+  # ---------- Stage 2: full cross-browser regression ----------
+  regression:
+    name: Regression (${{ matrix.browser }})
+    needs: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: ${{ fromJson(github.event.inputs.browsers || '["chromium","firefox"]') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17", cache: maven }
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-${{ hashFiles('pom.xml') }}
+      - name: Install Playwright ${{ matrix.browser }}
+        run: >
+          mvn -B -q exec:java -Dexec.mainClass=com.microsoft.playwright.CLI
+          -Dexec.classpathScope=test -Dexec.args="install --with-deps ${{ matrix.browser }}"
+      - name: Run regression
+        run: >
+          mvn -B clean test
+          -DsuiteXml=${{ github.event.inputs.suite || 'testng.xml' }}
+          -Dbrowser=${{ matrix.browser }} -Dheadless=true -Dbase.url=$BASE_URL
+        env:
+          TEST_EMAIL: ${{ secrets.TEST_EMAIL }}
+          TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: allure-results-${{ matrix.browser }}
+          path: target/allure-results
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: diagnostics-${{ matrix.browser }}
+          path: |
+            target/traces
+            target/logs
+          if-no-files-found: ignore
+
+  # ---------- Stage 3: build the Allure report (every run, incl. PRs) ----------
+  report:
+    name: Build Allure report
+    needs: [smoke, regression]
+    if: always() && needs.smoke.result != 'skipped'
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
-      with:
-        node-version: lts/*
-    - name: Install dependencies
-      run: npm ci
-    - name: Install Playwright Browsers
-      run: npx playwright install --with-deps
-    - name: Run Playwright tests
-      run: npx playwright test
-    - uses: actions/upload-artifact@v4
-      if: ${{ !cancelled() }}
-      with:
-        name: playwright-report
-        path: playwright-report/
-        retention-days: 30
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: allure-results-*
+          path: allure-results
+          merge-multiple: true
+      - name: Generate report
+        run: |
+          npm install -g allure-commandline
+          allure generate allure-results --clean -o allure-report
+      - uses: actions/upload-artifact@v4
+        with:
+          name: allure-report
+          path: allure-report
+      - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        with:
+          path: allure-report
+
+  # ---------- Stage 4: publish (CD) - only from the default branch ----------
+  deploy-report:
+    name: Publish report to GitHub Pages
+    needs: report
+    if: always() && needs.report.result == 'success' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

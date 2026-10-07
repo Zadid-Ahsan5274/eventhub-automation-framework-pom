@@ -22,6 +22,7 @@ if (env.isCI) reporters.push(['github']);
 
 export default defineConfig({
   testDir: './tests',
+  testIgnore: process.env.INSPECT === 'true' ? [] : ['**/_diagnostics/**'],
   outputDir: 'test-results',
   fullyParallel: true,
   forbidOnly: env.isCI,
